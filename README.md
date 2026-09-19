@@ -1,16 +1,6 @@
 # Plataforma de Coleta de Resíduos Urbanos
 
-**TDE — Sistemas Distribuídos (2026.2) · UNIFAN**
-**Etapa 1 — Proposta e Arquitetura do Projeto** · Defesa em 21/09/2026
-Docente: Prof. Rafael Levi Batista Costa
-
-> Esta etapa não entrega código de produção. Este README documenta a proposta
-> técnica completa exigida para a defesa: domínio, regras de negócio,
-> arquitetura, segurança, escalonamento, resiliência, DNS, cronograma e
-> divisão de papéis. Um protótipo REST simplificado (servidor Node.js +
-> cliente Python) já foi construído como prova de conceito do domínio e está
-> em [`/prototipo`](./prototipo) — ele valida o contrato de dados, não a
-> arquitetura final descrita abaixo.
+**TDE — Sistemas Distribuídos (2026.2) · UNIFAN Etapa 1**
 
 ## Sumário
 
@@ -23,8 +13,6 @@ Docente: Prof. Rafael Levi Batista Costa
 7. [Tolerância a falhas (resiliência)](#7-tolerância-a-falhas-resiliência)
 8. [DNS](#8-dns)
 9. [Repositório](#9-repositório)
-10. [Cronograma](#10-cronograma)
-11. [Papéis da equipe](#11-papéis-da-equipe)
 
 ---
 
@@ -47,22 +35,6 @@ três jornadas:
 3. **Reportar** — abertura de ocorrência (coleta não realizada, acúmulo
    irregular, container danificado, descarte de entulho) com protocolo de
    acompanhamento.
-
-**Personas:**
-
-| Persona | Necessidade |
-|---|---|
-| Cidadão | Saber quando colocar o lixo na rua; reportar falhas |
-| Operador da concessionária | Ver ocorrências abertas no seu setor, atualizar status |
-| Gestor municipal | Indicadores agregados: ocorrências por bairro, tempo médio de resolução |
-
-**Por que é um problema de sistemas distribuídos genuíno:** as três jornadas
-têm perfis de carga muito diferentes — leitura pesada e previsível (Coleta),
-busca geoespacial (Ecopontos) e escrita com picos súbitos e imprevisíveis
-(Ocorrências, disparadas por eventos externos como temporais). Modelar isso
-como uma aplicação única obrigaria a escalar tudo junto e concentraria risco
-num único ponto de falha — o que justifica, tecnicamente, a arquitetura
-descrita na seção 4.
 
 ## 2. Diferencial da solução
 
@@ -99,25 +71,9 @@ Ao contrário de uma central telefônica ou de um formulário estático:
 - Ecopontos podem aceitar múltiplos materiais; a busca por material é um
   filtro, não uma segmentação exclusiva.
 
-**Fora de escopo nesta fase:** app mobile nativo, roteirização de caminhões,
-pagamento/cobrança, integração com sistemas legados da prefeitura.
-
 ## 4. Arquitetura e system design
 
-### 4.1 Modelagem dos nós — monólito modular vs. microsserviços
-
-| | Monólito modular | Microsserviços (escolhido) |
-|---|---|---|
-| Complexidade operacional | Baixa | Alta, compensada pelo aprendizado do TDE |
-| Isolamento de falha | Um bug derruba tudo | Falha de um serviço não derruba os demais |
-| Escalonamento seletivo | Escala a aplicação inteira | Escala só o serviço sob pressão |
-| Ownership da squad | Difícil paralelizar | 1 serviço por integrante |
-
-Optamos por **microsserviços orientados a domínio** (DDD, *bounded
-contexts*) pelo motivo técnico já explicado na seção 1: perfis de carga e
-dado incompatíveis entre os domínios.
-
-### 4.2 Serviços (nós) do sistema
+### 4.1 Serviços (nós) do sistema
 
 | Serviço | Responsabilidade | Dado próprio | Protocolo exposto |
 |---|---|---|---|
@@ -131,7 +87,7 @@ dado incompatíveis entre os domínios.
 Cada serviço é **dono exclusivo do seu dado** (*database per service*) —
 nenhum serviço acessa a base de outro diretamente, só por API.
 
-### 4.3 Protocolos de comunicação entre serviços
+### 4.2 Protocolos de comunicação entre serviços
 
 - **Síncrono (REST/HTTPS)**: cliente ↔ Gateway ↔ serviços de consulta
   (Coleta, Ecopontos, Auth) — o usuário espera resposta na hora.
@@ -141,70 +97,7 @@ nenhum serviço acessa a base de outro diretamente, só por API.
 - Contrato OpenAPI por serviço síncrono + schema de evento JSON versionado
   para a fila.
 
-### 4.4 Desenho de recursos computacionais, banco de dados e nuvem
-
-```mermaid
-flowchart TB
-    subgraph CLIENTE["Cliente"]
-        WEB["Web app (SPA)"]
-    end
-
-    subgraph DNSCDN["DNS + Borda"]
-        R53["Route53<br/>api.coletafeira.com.br"]
-        WAF["CloudFront + AWS WAF<br/>TLS termination · proteção DDoS"]
-    end
-
-    subgraph REDE_PUBLICA["VPC — subnet pública"]
-        ALB["Load Balancer (ALB)<br/>health checks"]
-        GW1["API Gateway (réplica 1)"]
-        GW2["API Gateway (réplica 2)"]
-    end
-
-    subgraph REDE_PRIVADA["VPC — subnet privada"]
-        AUTH["Auth Service<br/>(auto scaling 1-3)"]
-        COL["Coleta Service<br/>(auto scaling 1-4)"]
-        ECO["Ecopontos Service<br/>(auto scaling 1-2)"]
-        OCO["Ocorrências Service<br/>(auto scaling 1-6)"]
-        NOT["Notificações Service<br/>(consumidor, 1-4)"]
-        CACHE[("Redis — cache de cronograma")]
-    end
-
-    subgraph DADOS["VPC — subnet de dados (isolada)"]
-        PGAUTH[("PostgreSQL — auth")]
-        PGCOL[("PostgreSQL — coleta<br/>+ réplica de leitura")]
-        PGECO[("PostgreSQL/PostGIS — ecopontos")]
-        MONGO[("MongoDB — ocorrências")]
-    end
-
-    MQ[("Message Broker<br/>fila + Dead Letter Queue")]
-    SECRETS[("Secrets Manager<br/>chaves JWT, credenciais de banco")]
-    OBS["Observabilidade<br/>logs, métricas, alertas"]
-
-    WEB --> R53 --> WAF --> ALB
-    ALB --> GW1 & GW2
-    GW1 & GW2 --> AUTH & COL & ECO & OCO
-    COL --> CACHE
-    COL --> PGCOL
-    AUTH --> PGAUTH
-    ECO --> PGECO
-    OCO --> MONGO
-    OCO -->|publica evento| MQ
-    MQ -->|consome com retry| NOT
-    MQ -.->|falha após N tentativas| MQ
-
-    AUTH -.-> SECRETS
-    GW1 & GW2 -.-> SECRETS
-
-    GW1 & GW2 -.-> OBS
-    AUTH & COL & ECO & OCO & NOT -.-> OBS
-```
-
-Segmentação em três camadas de rede (VPC): **subnet pública** (só Load
-Balancer e Gateway têm IP exposto), **subnet privada** (serviços de negócio,
-sem acesso direto da internet) e **subnet de dados isolada** (bancos, acesso
-restrito só aos serviços donos).
-
-**Recursos planejados por camada:**
+### 4.3 Recursos planejados por camada:
 
 | Recurso | Ferramenta/serviço | Finalidade |
 |---|---|---|
@@ -314,67 +207,3 @@ coleta-residuos-plataforma/
 │   └── docker-compose/           # ambiente local para dev — Etapa futura
 └── prototipo/                    # PoC já funcional (Node.js + Python)
 ```
-
-Cada `services/<nome>/` já existe como *bounded context* isolado (README
-descrevendo responsabilidade, dado próprio e contrato de API, mais um `src/`
-vazio) — é o esqueleto sobre o qual o código será escrito nas próximas
-entregas, sem misturar responsabilidades entre serviços desde já.
-
-### Governança e branches
-
-- `main` — protegida, só recebe merge via Pull Request revisado por outro
-  integrante.
-- `develop` — integração contínua do trabalho da squad.
-- `feature/<servico>-<descricao>` — uma branch por tarefa, a partir de
-  `develop`.
-- Commits seguem [Conventional Commits](https://www.conventionalcommits.org/)
-  (`feat:`, `fix:`, `docs:`, `chore:`).
-- Todo Pull Request usa o template em
-  [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md) e
-  exige revisão de ao menos um `CODEOWNER` do serviço alterado (ver
-  [`.github/CODEOWNERS`](./.github/CODEOWNERS)).
-
-## 10. Cronograma
-
-| Etapa | Entrega | Data |
-|---|---|---|
-| **1 — Proposta e arquitetura** | Repositório organizado, documentação, diagrama | 21/09/2026 (defesa) |
-| **2 — Contrato e serviços core** | OpenAPI de cada serviço; Coleta e Ecopontos implementados | a definir |
-| **3 — Mensageria e assincronismo** | Ocorrências publicando eventos; Notificações consumindo fila com DLQ | a definir |
-| **4 — Segurança e borda** | Auth Service (JWT); Gateway validando tokens; segredos fora do código | a definir |
-| **5 — Observabilidade e resiliência** | Circuit breaker; health checks; dashboards | a definir |
-| **6 — Entrega final** | Sistema integrado end-to-end; demonstração de escalonamento e failover | a definir |
-
-### Marcos internos da squad (Etapa 1)
-
-| Marco | Responsável | Status |
-|---|---|---|
-| Escopo, regras de negócio e diferencial | [Integrante] | ✅ concluído |
-| Modelagem dos nós e diagrama arquitetural | [Integrante] | ✅ concluído |
-| Segurança, escalonamento, resiliência, DNS | [Integrante] | ✅ concluído |
-| Organização do repositório e governança | [Integrante] | ✅ concluído |
-| Ensaio da apresentação | Todos | ⏳ pendente |
-
-## 11. Papéis da equipe
-
-> **Preencher com os nomes reais antes da defesa de 21/09.** A avaliação é
-> individualizada por integrante — cada linha precisa corresponder a uma
-> pessoa que consiga defender sua parte na banca.
-
-| Integrante | Papel principal | Serviço(s) sob responsabilidade | O que domina para a defesa |
-|---|---|---|---|
-| [Nome 1] | Arquitetura & Infraestrutura | API Gateway, infra (VPC, LB, DNS) | Modelagem de nós, escalonamento, DNS |
-| [Nome 2] | Segurança | Auth Service | Autenticação/autorização, segredos, WAF, rede |
-| [Nome 3] | Domínio — Coleta/Ecopontos | Coleta Service, Ecopontos Service | Regras de negócio, cache, read replicas |
-| [Nome 4] | Domínio — Ocorrências & Resiliência | Ocorrências Service, Notificações Service | Mensageria, DLQ, circuit breaker, backup |
-
-**Responsabilidades transversais**
-
-- **Documentação**: revisão coletiva antes de cada entrega.
-- **Governança do repositório** (branches, PR review, CODEOWNERS):
-  [Integrante] mantém o `.github/` atualizado.
-- **Ensaio da apresentação**: cada integrante apresenta a parte pela qual é
-  responsável — a banca avalia individualmente, então ninguém apresenta a
-  parte de outro colega no dia.
-- Todo Pull Request precisa ser aberto pela pessoa responsável pelo serviço
-  correspondente e revisado por pelo menos um outro integrante.
