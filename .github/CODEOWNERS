@@ -1,0 +1,11 @@
+# Cada serviço tem um dono responsável por revisar mudanças nele.
+# Preencher com os usernames reais do GitHub de cada integrante.
+
+/services/api-gateway/            @integrante-arquitetura
+/services/auth-service/           @integrante-seguranca
+/services/coleta-service/         @integrante-dominio-coleta
+/services/ecopontos-service/      @integrante-dominio-coleta
+/services/ocorrencias-service/    @integrante-dominio-ocorrencias
+/services/notificacoes-service/   @integrante-dominio-ocorrencias
+/infra/                           @integrante-arquitetura
+/README.md                        @integrante-arquitetura

@@ -1,0 +1,16 @@
+{
+  "name": "api-coleta-residuos",
+  "version": "1.0.0",
+  "description": "Servidor REST (Node.js + Express) para consulta pública da coleta de resíduos urbanos - TDE Sistemas Distribuídos",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "swagger-ui-express": "^5.0.1",
+    "yamljs": "^0.3.0"
+  },
+  "license": "MIT"
+}
