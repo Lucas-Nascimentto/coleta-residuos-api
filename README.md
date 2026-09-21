@@ -21,8 +21,8 @@
 **Problema:** o cronograma de coleta de resíduos urbanos em Feira de Santana
 é comunicado por meios informais e dispersos (cartazes, grupos de WhatsApp,
 ligações à prefeitura). O cidadão não sabe com precisão quando o caminhão
-passa no seu bairro — o que gera exposição prolongada de resíduos na via
-pública — e a prefeitura não tem um canal digital único para receber e
+passa no seu bairro, o que gera exposição prolongada de resíduos na via
+pública, e a prefeitura não tem um canal digital único para receber e
 rastrear reclamações sobre falhas no serviço.
 
 **Proposta de valor:** uma plataforma pública, web responsiva, que centraliza
@@ -66,8 +66,7 @@ Ao contrário de uma central telefônica ou de um formulário estático:
   nasce no status `ABERTA`.
 - Mudança de status de uma ocorrência (`ABERTA → EM_ANALISE → RESOLVIDA`)
   publica um evento assíncrono para notificar o solicitante — o serviço que
-  registra a ocorrência **não** envia a notificação diretamente (separação
-  de responsabilidades, ver seção 4).
+  registra a ocorrência **não** envia a notificação diretamente.
 - Ecopontos podem aceitar múltiplos materiais; a busca por material é um
   filtro, não uma segmentação exclusiva.
 
@@ -101,90 +100,76 @@ nenhum serviço acessa a base de outro diretamente, só por API.
 
 | Recurso | Ferramenta/serviço | Finalidade |
 |---|---|---|
-| Orquestração de containers | ECS (ou Kubernetes/EKS) | Deploy e auto scaling por serviço |
-| Bancos gerenciados | RDS (PostgreSQL), DocumentDB/MongoDB Atlas | Persistência por serviço, backups automáticos |
+| Orquestração de containers | Kubernetes/EKS | Deploy e auto scaling por serviço |
+| Bancos gerenciados | PostgreSQL | Persistência por serviço, backups automáticos |
 | Cache | ElastiCache (Redis) | Cache de leitura do Coleta Service |
-| Mensageria | SQS + SNS (ou RabbitMQ gerenciado) | Fila principal + Dead Letter Queue |
+| Mensageria | SQS + SNS | Fila principal + Dead Letter Queue |
 | CDN + WAF | CloudFront + AWS WAF | Borda, cache estático, proteção contra ataques |
 | Segredos | AWS Secrets Manager | Credenciais de banco, chave de assinatura JWT |
-| Observabilidade | CloudWatch (ou Prometheus + Grafana) | Logs, métricas, alertas, gatilhos de auto scaling |
+| Observabilidade | CloudWatch | Logs, métricas, alertas, gatilhos de auto scaling |
 
 ## 5. Segurança
-
-- **Autenticação/autorização**: Auth Service emite JWT de curta duração
-  (access token, 15 min) + refresh token (7 dias, revogável). O API Gateway
-  valida o token em toda requisição antes de rotear — os serviços internos
-  não reimplementam autenticação, apenas confiam no cabeçalho assinado pelo
-  Gateway (*trusted subsystem*). Tokens carregam `role`
-  (`cidadao`/`operador`/`gestor`); `POST /ocorrencias/{id}/status` exige
-  `operador` ou `gestor`.
-- **Gestão segura de segredos**: nenhuma credencial em variável de ambiente
-  commitada ou `.env` versionado — tudo em Secrets Manager (ou Vault),
-  injetado em runtime no container. Rotação automática a cada 90 dias.
-- **Proteção de borda**: WAF na CDN filtrando OWASP Top 10 (SQL injection,
-  XSS, bots) antes de qualquer requisição alcançar o Load Balancer. Rate
-  limiting por IP no API Gateway contra abuso do `POST /ocorrencias`.
-- **Regras de firewall e segmentação de rede**: Security Groups
-  restringindo a subnet de dados a receber tráfego *apenas* das subnets de
-  serviço correspondentes (ex: só Coleta Service fala com o Postgres de
-  coleta); nenhum banco tem IP público.
-- **Transporte**: TLS obrigatório ponta a ponta (HTTPS externo e mTLS
-  interno entre Gateway e serviços em versões futuras).
-
+ 
+- **Login e permissão (JWT)** — quando o cidadão faz login, o Auth Service dá
+  a ele um "crachá digital" (token) que prova quem ele é, sem precisar
+  mandar usuário/senha de novo a cada clique. Esse crachá expira em 15
+  minutos por segurança — se alguém roubar, vira inútil rápido. O crachá
+  também diz o *papel* da pessoa (cidadão, operador ou gestor): só operador
+  ou gestor conseguem mudar o status de uma ocorrência.
+- **Senhas e chaves guardadas num cofre separado** — nenhuma senha de banco
+  fica escrita dentro do código. Elas ficam guardadas num serviço à parte
+  (Secrets Manager) e são buscadas só na hora de rodar, e trocadas
+  automaticamente a cada 90 dias.
+- **Um filtro na porta de entrada (WAF) Web Application Firewall** — antes de qualquer requisição
+  chegar perto do sistema, passa por um filtro que bloqueia ataques
+  conhecidos (tipo alguém tentando injetar comandos maliciosos num campo de
+  texto). Também limitamos quantas vezes o mesmo IP pode abrir ocorrências
+  em pouco tempo, pra evitar spam.
+- **Cada parte só fala com quem precisa** — o banco de dados só aceita
+  conexão do serviço dono dele; nem o Gateway, que recebe todo o tráfego de
+  fora, consegue acessar o banco diretamente. Isso limita o estrago se
+  alguma parte for invadida.
+- **Tudo trafega criptografado** — toda comunicação usa HTTPS, então ninguém
+  consegue "espiar" o que passa entre o cidadão e o sistema.
 ## 6. Escalonamento
-
-- Cada serviço roda em **containers** (Docker), orquestrados (ECS/Kubernetes),
-  permitindo escalonamento **horizontal** independente por serviço.
-- **Auto scaling** com política adequada a cada carga:
-  - Coleta/Ecopontos (leitura pesada, previsível): CPU e latência média.
-  - Ocorrências (picos súbitos, ex: após temporal): profundidade da fila de
-    entrada e taxa de erro 5xx.
-  - Notificações: tamanho da fila de mensagens pendentes.
-- **Cache** (Redis) na frente do Coleta Service absorve a maior parte das
-  leituras de cronograma antes mesmo de escalar réplicas.
-- **Read replicas** no PostgreSQL de Coleta para picos de leitura sem
-  sobrecarregar a instância primária.
-- Escalonamento **vertical** reservado para os bancos de dados, onde
-  aumentar instância é mais simples que fragmentar dados nesta fase.
+ 
+- **Cada serviço escala sozinho, de forma independente** — como cada um roda
+  separado (dentro de um "container"), o sistema pode colocar mais cópias
+  só do serviço que está sob pressão, sem precisar duplicar o resto.
+- **Cada serviço escala por um motivo diferente**:
+  - Coleta e Ecopontos (muita gente consultando o tempo todo): escala
+    quando o uso de processamento sobe.
+  - Ocorrências (picos repentinos, ex: depois de um temporal, todo mundo
+    reclama junto): escala quando a fila de pedidos começa a acumular.
+  - Notificações: escala conforme a quantidade de e-mails/SMS esperando
+    para ser enviados.
 
 ## 7. Tolerância a falhas (resiliência)
-
-- **Circuit breaker** no API Gateway: se um serviço interno começa a falhar
-  acima de um limiar, o Gateway para de chamá-lo temporariamente e retorna
-  erro rápido ao cliente, evitando falha em cascata.
-- **Retries com backoff exponencial** no consumo da fila pelo Notificações
-  Service — falha transitória de envio de e-mail não perde a mensagem.
-- **Dead Letter Queue (DLQ)**: mensagens que falham após N tentativas vão
-  para uma fila separada, para investigação manual, sem travar as demais.
-- **Backup e recuperação**: snapshots automáticos diários dos bancos
-  relacionais (retenção de 7 dias) e backup contínuo do MongoDB; estratégia
-  **multi-AZ** nos bancos críticos (Ocorrências, Auth) para failover
-  automático em caso de indisponibilidade de uma zona.
-- **Health checks** no Load Balancer removendo automaticamente da rotação
-  qualquer réplica de serviço que pare de responder.
-
+ 
+- **Circuit breaker** ("disjuntor") no API Gateway — igual o disjuntor
+  elétrico da sua casa: se um serviço interno começa a falhar acima de um
+  limiar, o Gateway para de chamá-lo temporariamente e já retorna erro
+  rápido ao cliente, em vez de deixar todo mundo esperando uma resposta
+  que nunca chega. Isso evita que um problema pequeno vire um apagão geral
+  (falha em cascata).
+  
+- **Health checks** ("checagem constante de saúde") no Load Balancer — o
+  sistema fica perguntando periodicamente para cada cópia de cada serviço
+  "você está bem?", e remove automaticamente da rotação qualquer uma que
+  pare de responder.
 ## 8. DNS
-
-- Domínio raiz: `coletafeira.com.br`.
-- Subdomínios por finalidade:
-  - `api.coletafeira.com.br` → API Gateway (tráfego de produção)
-  - `admin.coletafeira.com.br` → painel do operador/gestor
-  - `docs.coletafeira.com.br` → documentação OpenAPI/Swagger pública
-  - `status.coletafeira.com.br` → página de status do sistema
-- Gerenciado via **Route53**, com **TTL baixo** (60s) para permitir troca
-  rápida de destino em caso de incidente.
-- Roteamento com **política de failover**: se a região primária falhar o
-  health check, o DNS passa a resolver para a região secundária
-  automaticamente, sem intervenção manual.
-- Internamente, os serviços **não** se descobrem por IP fixo: usam
-  *service discovery* interno do orquestrador (DNS interno do
-  ECS/Kubernetes) — uma réplica pode morrer e subir em outro host sem que
-  nenhum outro serviço precise ser reconfigurado.
+ 
+- **Domínio principal:** `coletafeira.com.br`, dividido em endereços
+  específicos pra cada finalidade — separar assim permite trocar ou
+  atualizar uma parte sem afetar as outras:
+  - `api.coletafeira.com.br` → onde o sistema realmente roda
+  - `admin.coletafeira.com.br` → painel de quem trabalha na prefeitura
+  - `docs.coletafeira.com.br` → documentação pública da API
 
 ## 9. Repositório
-
+ 
 ### Estrutura (projeto final)
-
+ 
 ```
 coleta-residuos-plataforma/
 ├── README.md                     # este arquivo — toda a proposta técnica
